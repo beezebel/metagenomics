@@ -1,0 +1,703 @@
+library(extrafont)
+font_import() #将特定字体导入R
+loadfonts() #加载特定字体
+library(dplyr)
+
+#导入数据，生成stamp比较文件
+filelist=list.files("data/species/")
+sample<-sub("_reads.O.bracken","",filelist)
+filelist=sub("","data/species/",filelist)
+a = read.delim(filelist[1], header = T)
+fnx = a[,c(1,7)]
+f1=fnx
+colnames(f1)[2]=sample[1]
+for (i in 2:length(filelist)) {
+  a = read.delim(filelist[i], header = T) 
+  fnx = a[,c(1,7)]
+  colnames(fnx)[2]=sample[i]
+  f1=full_join(f1,fnx,by="name")
+}
+f1[is.na(f1)]<-0
+row.names(f1)<-f1$name
+f1<-f1[,-1]
+colnames(f1)=c("TFO_S1","TFO_S2","TFO_W1","TFO_S3","TFO_W2","TFO_W3","TFO_S4","TFO_S5",
+                "TFI_S1","TFI_S2","TFI_W1","TFI_S3","TFI_W2","TFI_W3","TFI_S4","TFI_S5")
+dir.create("txt")
+dir.create("txt/species")
+write.csv(f1,"txt/species/stamp.csv")
+
+#层次聚类树状图及top20物种丰度堆叠柱状图绘制
+library(vegan) #生态学和多元统计分析包
+library(ape) #系统发生树分析
+library(ggtree) #定制化的系统发生树图形
+library(ggplot2) #数据可视化包
+library(reshape2) #数据重塑和重排
+library(ggrepel) #添加文本标签并避免标签重叠
+sp = data.frame(t(f1))
+dis_bray <- vegdist(sp, method = 'bray')
+tree <- hclust(dis_bray, method = 'average')
+tree <-as.phylo(tree)
+abundance <- apply(sp, 2, sum)
+abundance_top20 <- names(abundance[order(abundance, decreasing = TRUE)][1:20])
+top20 <- data.frame(sp[1:length(row.names(sp)),abundance_top20])
+top20$Others<-c(1-rowSums(top20))
+names<-c(row.names(top20))
+
+d<-data.frame(node=1:31,color="black")
+d[c(1,2,3,4,5,6,7,8,19,20,21,24,27,30,31),2]="#835C33"
+d[c(9,10,11,12,13,14,15,16,18,22,23,25,26,28,29),2]="#ABC2E3"
+p<-ggtree(tree,size=2)%<+%d+aes(color=I(color))+geom_tippoint(size = 2)+
+  geom_tiplab(hjust = -0.5,family = "Times New Roman",size = 6,face = "bold")+theme_tree2()+xlim_tree(0.45)
+p
+
+taxo<-data.frame(t(top20))
+taxo$Taxonomy <- factor(rownames(taxo), levels = rev(rownames(taxo)))
+taxo <- melt(taxo, id = 'Taxonomy')
+taxo <- taxo[c(2, 3, 1)]
+p1 <- p + geom_facet(panel = 'Relative abundance (%)', data = taxo, geom = geom_bar, 
+                     mapping = aes(x = 100 * value, fill = Taxonomy), color = 'gray30', 
+                     orientation = 'y', width = 0.5, stat = 'identity') +#绘制分类群丰度堆叠图
+  guides(fill = guide_legend( ncol = 1, byrow = TRUE,reverse=TRUE))+
+  theme(axis.text = element_text(size = 20,face = "bold"))+
+  scale_fill_manual(values = c('gray',"#66CC99","#999999","#ADD1E5","#74C476","#A1D99B","#02818A",
+                               "#E5F5E0","#F7FCF5","#016C59", "#014636", "#B2182B","#E69F00","#56B4E9",
+                               "#009E73","#F0E442","#0072B2","#D55E00","#CC79A7","#CC6666","#3690C0"))+ #赋值分类群颜色
+  theme(text = element_text(family = "Times New Roman",size = 22,face = "bold"))
+p1
+dir.create("plot")
+dir.create("plot/species")
+ggsave(filename = "plot/species/Barplot.png",p1,width = 12,height = 9)
+
+#样本间beta多样性分析，PCoA比较不同样本之间的差异
+pcoa <- cmdscale(dis_bray, k = (nrow(sp) - 1), eig = TRUE)
+pcoa_eig <- pcoa$eig
+barplot(pcoa_eig)
+pcoa_exp <- pcoa$eig/sum(pcoa$eig)
+site <- pcoa$point
+species <- wascores(pcoa$points[,1:2], sp)
+par(mfrow = c(1, 2))
+ordiplot(pcoa, type = 'text', main = 'PCoA')
+ordiplot(pcoa, type = 'text', main = 'PCoA')
+points(species[ ,1:2], pch = 3, cex = 0.7, col = 'blue')
+pcoa1 <- paste('PCoA axis1 :', round(100*pcoa_exp[1], 2), '%')
+pcoa2 <- paste('PCoA axis2 :', round(100*pcoa_exp[2], 2), '%')
+abundance <- apply(sp, 2, sum)
+abundance_top20 <- names(abundance[order(abundance, decreasing = TRUE)][1:20])
+site <- data.frame(pcoa$point)[1:2]
+site$name <- rownames(site)
+site$Site<-c(rep("TFO",each=8),rep("TFI",each=8))
+species_top20 <- data.frame(species[abundance_top20,1:2])
+species_top20$name <- rownames(species_top20)
+col_site<-c("TFI"="#ABC2E3","TFO"="#835C33")
+permanova<-data.frame(site$name,site$Site)
+permanova_result=adonis2(dis_bray~permanova$site.Site,distance = "bray", permutations = 999)
+permanova_result
+p2 <- ggplot(data = site, aes(X1, X2)) +
+  geom_point(aes(color = Site),size=10,alpha=.7)+
+  stat_ellipse(aes(fill = Site), level=0.95,show.legend=F,linetype=3,size=1.5) +       
+  scale_color_manual(values = col_site)+
+  scale_fill_manual(values = col_site) +
+  theme(panel.grid=element_blank(), 
+        panel.background = element_rect(color = 'black', fill = 'transparent',linewidth = 2),
+        plot.title = element_text(hjust = 0.5), legend.position = 'right',
+        legend.title = element_text(size = 35),legend.key.size = unit(2, "cm"),
+        legend.text = element_text(size = 30),
+        axis.text.x = element_text(size = 25,face = "bold"),
+        axis.text.y = element_text(size = 25,face = "bold"),
+        axis.title = element_text(size = 25,face = "bold"),text = element_text(family = "Times New Roman")) +
+  guides(fill = guide_legend(override.aes = list(size=10)))+
+  geom_vline(xintercept = 0, color = 'gray', size = 0.5) +
+  geom_hline(yintercept = 0, color = 'gray', size = 0.5) +labs(x = pcoa1, y = pcoa2)+
+  geom_text_repel(aes(label=row.names(site),color=Site),show.legend=F)+
+  annotate('text', label = 'PERMANOVA', x = -0.0, y = 0.35, size = 12, colour = 'black')+
+  annotate('text', label = 'F=20.797,P<0.001 ***', x = -0.0, y = 0.4, size = 10, colour = 'black')
+p2
+ggsave(filename = "plot/species/PCoA.png",p2,width = 11,height = 9)
+library(tidyr) #长短数据转化
+library(ggpubr) #箱线图显著性比较
+
+#定义alpha多样性计算功能，绘制alph多样性箱式图
+calculate_alpha <- function(otu){
+  Richness<- rowSums(otu>0)
+  Simpson  <- diversity(otu, index = 'simpson')
+  Shannon <- diversity(otu, index = 'shannon' , base = exp(1))
+  Pielou <- Shannon/log(Richness , base = exp(1))
+  alpha_matrix <- cbind(Richness,Simpson,Shannon,Pielou )
+  alpha_df <- as.data.frame(alpha_matrix)
+  return(alpha_df)
+}
+
+Order_alpha <- calculate_alpha(sp)
+Order_alpha$Site<-c(rep("TFO",each=8),rep("TFI",each=8))
+Order_alpha_long <- pivot_longer(Order_alpha , cols = -Site , names_to = "type" , values_to = "alpha_index")
+
+p3<-ggplot(Order_alpha_long,aes(x=Site,y=alpha_index,fill=Site))+
+  geom_boxplot(position=position_dodge(1))+
+  scale_fill_brewer(palette = "Accent")+
+  facet_wrap(~type,scales = "free_y")+
+  theme_bw()+scale_fill_manual(values = col_site)+
+  stat_compare_means(method =  "wilcox.test",label="p.signif",hide.ns=T)+
+  theme(panel.grid=element_blank(),legend.position = "none",
+        axis.text = element_text(size = 20,face = "bold"),
+        axis.title = element_text(size = 25),
+        text = element_text(family = "Times New Roman"),
+        strip.text = element_text(size = 35),
+        axis.title.x = element_blank())+
+  labs(y = "Alpha Index")
+p3
+ggsave(filename = "plot/species/Alpha.png",p3,width = 11,height = 9)
+write.csv(Order_alpha,file = "txt/species/Order_alpha.csv")
+
+#曼特检验
+library(ggcor)
+en<-read.csv("data/en/en.csv",header = T,row.names = 1)
+en<-en[order(row.names(en)), ]
+sp<-data.frame(t(f1))
+en.z <- decostand(en, "standardize")
+sp<-sp[order(row.names(sp)), ]
+mantel <- mantel_test(sp, en.z) %>% 
+  mutate(rd = cut(r, breaks = c(-Inf, 0.2, 0.4, Inf),
+                  labels = c("< 0.2", "0.2 - 0.4", ">= 0.4")),
+         pd = cut(p.value, breaks = c(-Inf, 0.001,0.01, 0.05, Inf),
+                  labels = c("< 0.001", "<0.01","0.01 - 0.05", ">= 0.05")))
+p4<-quickcor(en.z, type = "upper",show.diag = FALSE,grid.colour = "grey50",
+              grid.size = 1,text.size = 5,cor.test =T) +geom_circle2() +
+  geom_mark(r = NA,sig.thres = 0.05, size = 10, colour = "black")+
+  anno_link(aes(colour = pd, size = rd), data = mantel,curvature = -0.2) +
+  scale_size_manual(values = c(0.5, 2, 3))+scale_color_manual(values = c("darkorchid1","green4","black"))+
+  guides(size = guide_legend(title = "Mantel's r",order = 2),
+         colour = guide_legend(title = "Mantel's p",  order = 3),
+         fill = guide_colorbar(title = "Pearson's r", order = 4))+     
+  scale_fill_gradient2(midpoint = 0,low = "steelblue4",mid = "white",high = "darkred",space = "Lab")
+p4
+ggsave(filename = "plot/species/mantel.png",p14,width = 12,height = 9)
+
+#冗余分析
+library(tidyverse)
+library(vegan)
+library(ggrepel)
+library(cowplot)
+e<-log(en+1)
+spec<- decostand(sp,"hellinger")
+DCA <- decorana(spec, ira = 0) 
+summary(DCA)
+mod1 <- rda(spec~pH+EC+TN+TP+TOC+COD+ChlA+DOC+NO3.N,en.z)
+vif.cca(mod1)#排除共线性因子
+mod2 <- rda(spec~pH+EC+TN+DOC+NO3.N,en.z)#排除之后
+mod0 <- rda(spec~1,e)
+step.forward <- ordiR2step(mod0,scope = formula(mod2),direction ="forward",permutations = 999)
+anova(step.forward)
+rda<- rda(spec~pH+EC+TN+DOC+NO3.N,en.z)
+sp_rda <- as.data.frame(scores(rda, choices = 1:2, scaling = 2, display = 'sp'))
+sp_rda$LEN <- (sp_rda$RDA1)^2+(sp_rda$RDA2)^2
+new_sp <- sp_rda[order(sp_rda[,3],decreasing=T),][1:8,]
+st <- as.data.frame(scores(rda, choices = 1:2, scaling = 2, display = 'wa'))
+env <- as.data.frame(scores(rda, choices = 1:2, scaling = 2, display = 'bp'))
+st$Site<-c(rep("TFI",each=8),rep("TFO",each=8))
+p15<- ggplot(st, aes(x=RDA1, y=RDA2, color=Site)) + 
+  geom_point(alpha=.7, size=5,show.legend=F) +
+  scale_fill_manual(values = col_site) +
+  scale_color_manual(values = col_site)+
+  stat_ellipse(level=0.95,show.legend=F,linetype=3,size=1.5) +
+  theme(panel.grid=element_blank(), 
+        panel.background = element_rect(color = 'black', fill = 'transparent',linewidth = 2),
+        plot.title = element_text(hjust = 0.5), legend.position = 'right',
+        legend.title = element_text(size = 35),legend.key.size = unit(2, "cm"),
+        legend.text = element_text(size = 30),
+        axis.text.x = element_text(size = 25,face = "bold"),
+        axis.text.y = element_text(size = 25,face = "bold"),
+        axis.title = element_text(size = 25,face = "bold"),text = element_text(family = "Times New Roman"))+
+  geom_hline(yintercept=0,linetype=3,size=1, colour = "darkgrey") + 
+  geom_vline(xintercept=0,linetype=3,size=1, colour = "darkgrey") +
+  labs(x="RDA 1 (75.19%)", sep="",y="RDA 2 (8.15%)", sep="") +
+  geom_text_repel(data = st, aes(RDA1,RDA2,label=row.names(st)),show.legend=F,box.padding=0.5,size=5) +
+  geom_text_repel(data = new_sp,aes(x=RDA1,y=RDA2,label=row.names(new_sp)),colour = "maroon3") + 
+  geom_text_repel(data = env,aes(x=RDA1,y=RDA2,label=row.names(env)),colour = "black",size=8,point.padding=0.5) +
+  geom_point(data = new_sp, aes(x=RDA1, y=RDA2), shape= 2, size = 2,colour = "maroon3") +
+  geom_segment(data = env,aes(x = 0, y = 0, xend = RDA1, yend = RDA2), 
+               arrow = arrow(angle=30,length = unit(0.3,"cm"),type = "open"),
+               linetype=1, size=1.5,colour = "black")
+p5
+ggsave(filename = "plot/species/RDA.png",p5,width = 11,height = 9)
+
+en$Site<-c(rep("TFI",each=8),rep("TFO",each=8))
+en_long <- pivot_longer(en , cols = -Site , names_to = "type" , values_to = "Environment")
+p3<-ggplot(en_long,aes(x=Site,y=Environment,fill=Site))+
+  geom_boxplot(position=position_dodge(1))+
+  scale_fill_brewer(palette = "Accent")+
+  facet_wrap(~type,scales = "free_y")+
+  theme_bw()+scale_fill_manual(values = col_site)+
+  stat_compare_means(method =  "anova",vjust = 1.0)+
+  theme(panel.grid=element_blank(),legend.position = "none",
+        axis.text = element_text(size = 15,face = "bold"),
+        axis.title = element_text(size = 25),
+        text = element_text(family = "Times New Roman"),
+        strip.text = element_text(size = 20,vjust = 1),
+        axis.title.x = element_blank())+
+  labs(y = "Environment Factors")
+p6
+ggsave(filename = "plot/species/en.png",p6,width = 11,height = 9)
+
+library(WGCNA) #用于分析和探索数据的共现表达网络
+library(igraph)#网络分析
+library(microeco)#网络构建
+library(eatTools)#
+taxonomy<-read.delim("data/txt/taxonomy.txt")
+taxonomy<-taxonomy[!duplicated(taxonomy$Order),]
+taxonomy<-taxonomy[,2:5]
+colnames(taxonomy)[4]="name"
+
+TFO_net_data<-data.frame(t(sp[1:8,]))
+TFO_net_data<-TFO_net_data[apply(TFO_net_data, 1, function(x) sum(x > 0)/length(x) > 0.67), , drop = FALSE]
+TFO_information<-data.frame(row.names(TFO_net_data))
+colnames(TFO_information)[1]="name"
+TFO_information$abundance<-rowMeans(TFO_net_data)
+TFO_information<-left_join(TFO_information,taxonomy,by="name")
+TFO_MM_cor <- corAndPvalue(t(TFO_net_data),method ="spearman")
+TFO_r <- TFO_MM_cor$cor
+TFO_p<- TFO_MM_cor$p
+TFO_r[TFO_p>0.01|abs(TFO_r)<0.8] = 0
+diag(TFO_r) <- 0
+
+#构建gephi分析的数据
+TFO_g <- graph.adjacency(TFO_r, weighted = TRUE, mode = 'undirected')
+TFO_g <- simplify(TFO_g)
+TFO_g <- delete.vertices(TFO_g, names(degree(TFO_g)[degree(TFO_g) == 0]))
+E(TFO_g)$correlation <- E(TFO_g)$weight
+E(TFO_g)$weight <- abs(E(TFO_g)$weight)
+plot(TFO_g)
+dir.create("gephi")
+write.graph(TFO_g, 'gephi/TFO_net.graphml', format = 'graphml')
+
+data(dataset)
+TFO_t1 <- trans_network$new(dataset = dataset, cal_cor = "WGCNA",
+                            filter_thres = 0.01, cor_method = "spearman")
+TFO_t1$res_network <-TFO_g
+TFO_t1$cal_network_attr()
+TFO_t1$cal_module()
+TFO_t1$get_node_table(node_roles = TRUE)
+TFO_net_top<- TFO_t1$res_node_table
+TFO_net_top<-TFO_net_top[,-c(4,9:15)]
+TFO_net_top<-left_join(TFO_net_top,TFO_information,by="name")
+TFO_t1$res_node_table<-TFO_net_top
+write.csv(TFO_net_top, 'gephi/TFO_net_top.csv',row.names = F)
+
+clustering_coefficient_rand <- c()
+average_path_length_rand <- c()
+diameter_rand<-c()
+modularity_rand<-c()
+set.seed(41)
+
+for (i in 1:1000) {
+  g_rand <- erdos.renyi.game(n = 95, p = 243,type = 'gnm')
+  modu_network = cluster_fast_greedy(g_rand,weights =NULL)
+  clustering_coefficient_rand <- c(clustering_coefficient_rand, transitivity(g_rand))
+  average_path_length_rand <- c(average_path_length_rand, average.path.length(g_rand, directed = FALSE))
+  diameter_rand<-c(diameter_rand,diameter(g_rand))
+  modularity_rand<-c(modularity_rand,modularity_rand<-modularity(g_rand,membership(modu_network)))
+}
+clustering_coefficient_TFO<-c(0.501) #输入gephi计算结果
+average_path_length_TFO<-c(3.686)
+small_world_coefficient <- (clustering_coefficient_TFO/clustering_coefficient_rand) / 
+  (average_path_length_TFO/average_path_length_rand)
+TFO_mean<-c(mean(diameter_rand),mean(modularity_rand),mean(average_path_length_rand),
+            mean(clustering_coefficient_rand), mean(small_world_coefficient))
+TFO_sd<-c(sd(diameter_rand),sd(modularity_rand),sd(average_path_length_rand),
+          sd(clustering_coefficient_rand), sd(small_world_coefficient))
+
+rand_net_data<-data.frame(TFO_mean,TFO_sd,
+                          row.names = c("diameter","modularity","average_path_length",
+                                        "lustering_coefficient","small_world"))
+write.csv(rand_net_data,file = "txt/species/rand_net_data.csv")
+
+netdata<-read.csv("data/txt/net_data.csv")
+
+#检验是否符合正态分布
+net_name<-colnames(netdata)
+shapiro<-tapply(netdata[,2], netdata[,1], shapiro.test)
+a1<-c(shapiro[[1]]$p.value,shapiro[[2]]$p.value)
+for (i in 3:length(net_name)) {
+  shapiro<-tapply(netdata[,i], netdata[,1], shapiro.test)
+  a2<-c(shapiro[[1]]$p.value,shapiro[[2]]$p.value)
+  a1<-data.frame(a1,a2)
+}
+shapiro.test<-data.frame(a1)
+colnames(shapiro.test)<-net_name[2:length(net_name)]
+
+#秩和检验结果
+wilcox <- wilcox.test(netdata[,2]~netdata[,1], netdata, paired = FALSE, alternative = 'two.sided')$p.value
+for (i in 3:length(net_name)){
+  a2 <- wilcox.test(netdata[,i]~netdata[,1], netdata, paired = FALSE, alternative = 'two.sided')$p.value
+  wilcox<-c( wilcox,a2)
+}
+p7<-ggplot(netdata,aes(x=site,y=closnesscentrality))+stat_boxplot(geom = "errorbar", width=0.2,size=1.5)+
+  geom_boxplot(aes(fill=site),outlier.colour="black",linewidth=0.8)+
+  theme(panel.grid=element_blank(), 
+        panel.background = element_rect(color = 'black', fill = 'transparent',size = 2),
+        legend.position="none",plot.title = element_text(size=14),
+        axis.text = element_text(size = 30,face = "bold"),
+        axis.title = element_text(size = 40,face = "bold"),
+        text = element_text(family = "Times New Roman"))+#图例位置
+  geom_jitter(width = 0.2)+#添加抖动点
+  geom_signif(comparisons = list(c("TFI","TFO")),map_signif_level = T,size = 1.5, textsize = 8)+
+  scale_fill_manual(values = col_site)+labs(y="Closness centrality",x="")
+p7
+ggsave(filename = "plot/species/TopologyProperties.png",p7,width = 12,height = 9)
+
+#幂律分布检验
+adjacency_unweight<-TFO_r
+adjacency_unweight[abs(adjacency_unweight)>0]=1
+igraph <- graph_from_adjacency_matrix(as.matrix(adjacency_unweight), mode = 'undirected', weighted = NULL, diag = FALSE)
+V(igraph)$degree <- degree(igraph)                                      
+degree_dist <- table(V(igraph)$degree)
+degree_num <- as.numeric(names(degree_dist))
+degree_count <- as.numeric(degree_dist)
+dat <- data.frame(degree = degree_num, count = degree_count)
+dat<-dat[-1,]
+dat$log10_degree <- log10(dat$degree)
+dat$log10_count <- log10(dat$count)
+fit <- lm(log10_count~log10_degree, data = dat)
+par(mfrow = c(1, 3))
+
+hist(V(igraph)$degree, xlab = 'Degree', ylab = 'Frequency',
+     main = 'Degree distribution')
+plot(degree_count, degree_num, xlab = 'Degree', ylab = 'Count',
+     main = 'Degree distribution')
+plot(degree_count, degree_num, log = 'xy', xlab = 'Log-degree',
+     ylab = 'Log-count', main = 'Log-log degree distribution')
+mod <- nls(count ~ a*degree^b, data = dat, start = list(a =1, b =2))
+summary(mod)
+a <- round(coef(mod)[1], 3)
+b <- round(coef(mod)[2], 3)
+
+fit <- fitted(mod)
+SSre <- sum((dat$count-fit)^2)
+SStot <- sum((dat$count-mean(dat$count))^2)
+R2 <- round(1 - SSre/SStot, 3)
+R2
+p_num <- 1
+dat_rand <- dat
+for (i in 1:999) {
+  dat_rand$count <- sample(dat_rand$count)
+  SSre_rand <- sum((dat_rand$count-fit)^2)
+  SStot_rand <- sum((dat_rand$count-mean(dat_rand$count))^2)
+  R2_rand <- 1 - SSre_rand/SStot_rand
+  if (R2_rand > R2) p_num <- p_num + 1
+}
+p_value <- p_num / (999+1)
+p_value
+
+p <- ggplot(dat, aes(x = degree, y = count)) +
+  geom_point(color = 'blue') +
+  theme(panel.grid=element_blank(), panel.background = element_rect(color = 'black', fill = 'transparent')) +
+  stat_smooth(method = 'nls', formula = y ~ a*x^b, method.args = list(start = list(a = 2, b = 1.5)), se = FALSE) +
+  labs(x = 'Degree', y = 'Count')
+p
+
+label <- data.frame(
+  formula = sprintf('italic(Y) == %.3f*italic(X)^%.3f', a, b),
+  R2 = sprintf('italic(R^2) == %.3f', R2),
+  p_value = sprintf('italic(P) < %.3f', p_value)
+)
+
+
+p8<-p + geom_text(x = 7.5, y = 15, aes(label = formula), data = label, parse = TRUE, hjust = 0,size=7) +
+  geom_text(x = 7.5, y = 13, aes(label = R2), data = label, parse = TRUE, hjust = 0,size=7) +
+  geom_text(x = 7.5, y = 11, aes(label = p_value), data = label, parse = TRUE, hjust = 0,size=7)
+p8
+ggsave(filename = "plot/Species/S2-1.png",p8,width = 9,height = 9)
+
+#读取功能信息
+library(stringr)#文本处理包
+filelist=list.files("data/function/")
+sample<-sub(".fasta.emapper.seed_orthologs.emapper.annotations","",filelist)
+filelist=sub("","data/function/",filelist)
+set.seed(1234)
+gene_list<-list()
+for (i in 1:length(filelist)) {
+  eggnog<-read.delim(filelist[i], header = T)
+  eggnog<-sample_n(eggnog,size = 179000)
+  gene_ids <- eggnog$X.query
+  eggnog_lines_with_kegg <- eggnog$KEGG_ko!= ""
+  eggnog_annoations_kegg <- str_split(eggnog[eggnog_lines_with_kegg,]$KEGG_ko, ",")
+  gene_to_kegg <- data.frame(query = rep(gene_ids[eggnog_lines_with_kegg],
+                                         times = sapply(eggnog_annoations_kegg, length)),
+                             kegg= unlist(eggnog_annoations_kegg))
+  gene_to_kegg=gene_to_kegg[gene_to_kegg$kegg!="-",]
+  gene<-data.frame(gene_to_kegg[!duplicated(gene_to_kegg[,2]),])
+  gene_list[[i]]=gene$kegg
+  names(gene_list)[i]=sample[i]
+}
+
+TFO_list<-gene_list[1:8]
+
+#筛选核心基因
+library(VennDiagram)
+dir.create("txt/function")
+TFO_inter <- get.venn.partitions(TFO_list)
+write.csv(TFO_inter[,c(1:8,11)],file = "txt/function/TFO_VENN.csv",row.names = F)
+TFO_common<-data.frame(TFO_inter[1,10])
+df<-data.frame(x=LETTERS[1:8],
+               A=c("TFO_S1","TFO_S2","TFO_W1","TFO_S3","TFO_W2","TFO_W3","TFO_S4","TFO_S5"),
+               B=c(134,108,101,84,77,62,47,55),
+               D=c(1496,1567,1427,1357,1157,1258,1358,1447)) 
+x<-1:(8*30)
+y<-abs(sin(8*(x/(8*30))*pi))
+df1<-data.frame(x1=x,y1=abs(y),
+                var=gl(8,30,labels = LETTERS[1:8]))
+df2<-merge(df1,df,by.x = 'var',by.y = 'x')
+
+p9<-ggplot()+geom_area(data = data.frame(x=1:240,y=0.7),
+                        aes(x=x,y=y),fill="#835C33",alpha=1)+
+  ggnewscale::new_scale_fill()+
+  geom_area(data=df2,aes(x=x1,y=y1,fill=var),alpha=0.8)+
+  scale_fill_manual(values = c("#ff8e54","#f63c50","#0088bf","#77d793",
+                               "#e1f594","#ffffbe","#ffe087","#4DAF4A"))+
+  coord_polar()+geom_area(data = data.frame(x=1:240,y=0.2),
+                          aes(x=x,y=y),fill="#835C33",alpha=1)+
+  theme_void()+geom_text(data=df2 %>% filter(y1==1),
+                         aes(x=x1,y=y1+0.2,label=A),fontface=4,family = "Times New Roman",size=10)+
+  geom_text(data=df2 %>% filter(y1==1),aes(x=x1,y=y1-0.2,label=B),family = "Times New Roman",size=10,fontface="bold")+
+  geom_text(data=df2 %>% filter(y1==1),aes(x=x1,y=y1-0.6,label=D),family = "Times New Roman",size=8,fontface="bold")+
+  annotate(geom = "text",x=1,y=0,label="Core 3621",family ="Times New Roman",size=6,fontface="bold")+
+  theme(legend.position = "none")
+p9
+dir.create("plot/function")
+ggsave(filename = "plot/function/flower_TFO.png",p9,width = 9,height = 9,dpi =300)
+
+#核心基因匹配KEGG
+kegg<-read.delim("data/txt/ko00001.txt")
+kegg<-kegg[kegg$PathwayL1=="Metabolism",]
+common<-intersect(TFI_common,TFO_common)
+TFI_unique<-setdiff(TFI_common,TFO_common)
+TFO_unique<-setdiff(TFO_common,TFI_common)
+TFI_unique$X1<-sub("ko:","",TFI_unique$X1)
+TFO_unique$X1<-sub("ko:","",TFO_unique$X1)
+colnames(TFI_unique)[1]="KO"
+colnames(TFO_unique)[1]="KO"
+TFI_unique<-left_join(TFI_unique,kegg,by="KO")
+TFO_unique<-left_join(TFO_unique,kegg,by="KO")
+TFI_unique<-distinct(na.omit(TFI_unique[,c(1,3)]))
+TFO_unique<-distinct(na.omit(TFO_unique[,c(1,3)]))
+pathway2<-left_join(data.frame(table(TFI_unique$PathwayL2)),
+                    data.frame(table(TFO_unique$PathwayL2)),
+                    by="Var1")
+colnames(pathway2)=c("Pathway","TFI","TFO")
+long_bar_data<-gather(pathway2,Site,number,2:3)
+
+p10<-ggplot(long_bar_data,aes(Pathway,number,fill=Site,lable = number))+
+  geom_bar(size = 1.5,position="dodge", stat="identity",width = 0.8)+#绘制柱状图
+  labs(x="",y=NULL)+#去除轴标题
+  theme_bw()+#主题
+  theme(panel.grid=element_blank(), axis.text = element_text(size = 20,face = "bold"),
+        axis.title = element_text(size = 25,face = "bold"),legend.key.size = unit(12, "mm"),
+        legend.position="right",legend.text = element_text(size = 20,face = "bold"),
+        text = element_text(family = "Times New Roman"),
+        panel.background = element_rect(color = 'black', fill = 'transparent',size = 2),)+
+  scale_fill_manual(values = col_site)+
+  coord_flip()+ labs( y = 'Number of annotated genes', x = 'Function class', fill = '')
+p10
+ggsave(filename = "plot/function/barplot.png",p10,width = 12,height = 9)
+
+#核心功能物种贡献率
+library(scales)
+library(magrittr)
+set.seed(1234)
+specific_characters <-unique(taxonomy$Phylum)
+specific_characters<-c(specific_characters,"Alphaproteobacteria","Betaproteobacteria",
+                       "Gammaproteobacteria","delta/epsilon subdivisions")
+specific_characters<-specific_characters[-(1:2)]
+eggnog<-read.delim(filelist[1], header = T)
+
+eggnog<-sample_n(eggnog,size = 179000)
+n1<-filter(eggnog, grepl(TFO_unique[1,1], KEGG_ko))
+for (j in 2:nrow(TFO_unique)) {
+  n2<-filter(eggnog, grepl(TFO_unique[j,1], KEGG_ko))
+  n1<-rbind(n1,n2)
+}
+for (i in 1:length(n1$eggNOG_OGs)) {
+  matches <- regmatches(n1$eggNOG_OGs[i], regexpr(paste(specific_characters, collapse = "|"),n1$eggNOG_OGs[i]))
+  if (length(matches) > 0) {
+    n1$max_annot_lvl[i] <- matches
+  }
+}
+n1<-n1[,c(6,12)]
+n1<-distinct(n1)
+
+for (i in 1:length(n1$KEGG_ko)) {
+  matches <- regmatches(n1$KEGG_ko[i], regexpr(paste(TFO_unique$KO, collapse = "|"),n1$KEGG_ko[i]))
+  if (length(matches) > 0) {
+    n1$KEGG_ko[i] <- matches
+  }
+}
+
+s1<-data.frame(table(n1$max_annot_lvl))
+for (i in 2:8) {
+  eggnog<-read.delim(filelist[i], header = T)
+  eggnog<-sample_n(eggnog,size = 179000)
+  n1<-filter(eggnog, grepl(TFO_unique[1,1], KEGG_ko))
+  for (j in 2:nrow(TFI_unique)) {
+    n2<-filter(eggnog, grepl(TFO_unique[j,1], KEGG_ko))
+    n1<-rbind(n1,n2)
+  }
+  for (i in 1:length(n1$eggNOG_OGs)) {
+    matches <- regmatches(n1$eggNOG_OGs[i], regexpr(paste(specific_characters, collapse = "|"),n1$eggNOG_OGs[i]))
+    if (length(matches) > 0) {
+      n1$max_annot_lvl[i] <- matches
+    }
+  }
+  n1<-n1[,c(6,12)]
+  for (i in 1:length(n1$KEGG_ko)) {
+    matches <- regmatches(n1$KEGG_ko[i], regexpr(paste(TFO_unique$KO, collapse = "|"),n1$KEGG_ko[i]))
+    if (length(matches) > 0) {
+      n1$KEGG_ko[i] <- matches
+    }
+  }
+  n1<-distinct(n1)
+  s2<-data.frame(table(n1$max_annot_lvl))
+  s1<-full_join(s1,s2,by="Var1")
+}
+
+TFO_s2f<-s1
+s2f<-full_join(TFO_s2f,TFI_s2f,by="Var1")
+s2f[is.na(s2f)] <- 0
+s2f$Var1<- gsub(".*\\|", "", s2f$Var1)
+row.names(s2f)<-s2f$Var1
+s2f<-s2f[,-1]
+colnames(s2f)<-names
+s2f<-proportions(as.matrix(s2f), 2)%>%data.frame()
+
+abundance_s <- apply(t(s2f), 2, sum)
+abundance_top10 <- names(abundance_s[order(abundance_s, decreasing = TRUE)][1:10])
+top10 <- data.frame(s2f[abundance_top10,1:length(colnames(s2f))])
+top10["Others",]<-c(colSums(s2f)-colSums(top10))
+rownames(top10)[9]="Delta/Epsilonproteobacteria"
+top10_wilcox<-data.frame(t(top10))
+write.csv(top10_wilcox,file = "txt/function/f2p.csv")
+top10_wilcox$Site<-c(rep("TFO",each=8),rep("TFI",each=8))
+top10$Taxonomy <- factor(rownames(top10), levels = rev(rownames(top10)))
+top10 <- melt(top10, id = 'Taxonomy')
+top10$Site<-c(rep("TFO",each=88),rep("TFI",each=88))
+
+p9<-ggplot(top10[top10$Site=="TFO",], aes(variable, value, fill = Taxonomy)) +
+  geom_bar(stat="identity", position="fill", width =0.9) +
+  theme_bw() +
+  theme(axis.title = element_blank(),
+        axis.text.x = element_blank(),
+        panel.grid = element_blank()) +coord_polar(theta = "y")+
+  scale_fill_manual(values =c("#1883AF","#374955", "#9BAEBC", "#BF5972", 
+                              "#6F355E", "#EC9929", "#FFEBCD", "#8D7257", '#BF5972', 
+                              '#EEE8A9', '#A46690', '#B9A6B2'))+
+  theme(text = element_text(family = "Times New Roman",size = 30,face = "bold"),
+        legend.text = element_text(size = 25,face = "bold"),
+        legend.title = element_text(size = 30,face = "bold"))+
+  guides(fill = guide_legend( ncol = 1,byrow = TRUE, reverse=TRUE))
+p11
+ggsave(filename = "plot/function/f2s-TFO.png",p11,width = 25,height = 9)
+
+#KEGG二级代谢通路相对丰度差异
+library(pheatmap)
+kegg_abundance<-read.delim("data/txt/KEGG.PathwayL2.raw.txt",row.names = 1)
+kegg_abundance_std<-data.frame(t(apply(t(kegg_abundance),2,scale)))
+colnames(kegg_abundance_std)<-colnames(kegg_abundance)
+col_annotation_df<-c(rep("TFI",each=8),rep("TFO",each=8))
+col_annotation_df<-data.frame(col_annotation_df)
+row.names(col_annotation_df)<-colnames(kegg_abundance_std)
+colnames(col_annotation_df)<-c("Site")
+row_annotion_df<-data.frame(rep("Metabolism",each=11))
+row.names(row_annotion_df)<-row.names(kegg_abundance_std)
+colnames(row_annotion_df)<-c("Metabolism")
+p12<-pheatmap(kegg_abundance_std,fontsize_number=25,fontsize = 15,angle_col = "315", 
+              treeheight_row = 0,treeheight_col = 60,border_color = "#EEEEEE",cellwidth = 25,
+              cellheight = 25, fontfamily= "Times New Roman",
+              color = colorRampPalette(c("#00008B",'white',"#FFA500"))(50), number_color="white",
+              annotation_col = col_annotation_df,annotation_row = row_annotion_df,
+              annotation_colors =list(Site=col_site),cutree_cols = 3)
+ggsave(filename = "plot/function/abundance.png",p12,width = 12,height = 9,dpi = 300)
+
+#氮循环基因丰度计算
+ko_abundance<-read.delim("data/txt/eggnog.KEGG_ko.raw.txt",row.names = 1)
+Ncyc<-read.delim("data/N/TF.diamond",header = F)
+TPM<-read.table("data/N/TPM.csv")
+
+Ncyc<-Ncyc[,1:2]
+colnames(Ncyc)=c("Name","eg")
+map<-read.delim("data/N/id2gene.map.2019Jul",header = F)
+colnames(map)=c("eg","gene")
+Ncyc<-inner_join(Ncyc,map,by="eg")
+
+colnames(TPM)<-TPM[1,]
+TPM<-TPM[-1,]
+Ncyc<-left_join(Ncyc,TPM,by="Name")
+Ncyc<-Ncyc[,-(1:2)]
+Ncyc[,2] <- as.numeric(Ncyc[,2])
+alldata<-aggregate(Ncyc[,2]~gene,data=Ncyc,sum)
+colnames(alldata)[2]<-"test"
+for (i in 2:length(colnames(Ncyc))) {
+  Ncyc[,i] <- as.numeric(Ncyc[,i])
+  ter<-aggregate(Ncyc[,i]~ gene,data=Ncyc,sum)
+  colnames(ter)[2]<-i
+  alldata<-merge(alldata,ter,by="gene")
+}
+alldata<-alldata[,-2]
+colnames(alldata)[2:17]=colnames(Ncyc)[2:17]
+dir.create("txt/N")
+write.csv(alldata,file = "txt/N/Ncyc_gene_abundance.csv",row.names = F)
+Ncyc<-alldata
+
+NCycDB<-read.csv("data/N/Ncycle_familiy.csv")
+Ncyc_family<-left_join(Ncyc,NCycDB,by="gene")
+alldata<-aggregate(Ncyc_family[,2] ~ gene_family,data=Ncyc_family,mean)
+colnames(alldata)[2]<-"test"
+for (i in 2:17) {
+  ter<-aggregate(Ncyc_family[,i] ~ gene_family,data=Ncyc_family,mean)
+  colnames(ter)[2]<-i
+  alldata<-merge(alldata,ter,by="gene_family")
+}
+alldata<-alldata[,-2]
+colnames(alldata)[2:17]=colnames(Ncyc_family)[2:17]
+write.csv(alldata,file = "txt/N/Ncyc_family_abundance.csv",row.names = F)
+Ncyc_family<-alldata
+
+Ncyc_pathway<-data.frame(NCycDB[!duplicated(NCycDB[,2]),2:3])
+Ncyc_pathway<-left_join(Ncyc_family,Ncyc_pathway,by="gene_family")
+
+alldata<-aggregate(Ncyc_pathway[,2] ~ pathway,data=Ncyc_pathway,sum)
+colnames(alldata)[2]<-"test"
+for (i in 2:17) {
+  ter<-aggregate(Ncyc_pathway[,i] ~ pathway,data=Ncyc_pathway,sum)
+  colnames(ter)[2]<-i
+  alldata<-merge(alldata,ter,by="pathway")
+}
+alldata<-alldata[,-2]
+colnames(alldata)[2:17]=colnames(Ncyc_pathway)[2:17]
+write.csv(alldata,file = "txt/N/Ncyc_pathway_abundance.csv",row.names = F)
+Ncyc_pathway<-alldata
+
+library(psych)
+library(pheatmap)
+top10<-top20[,1:10]
+row.names(Ncyc_family)<-Ncyc_family$gene_family
+Ncyc_family<-Ncyc_family[,-1]
+N_function<-data.frame(t(proportions(as.matrix(Ncyc_family), 2)))
+N_function<-N_function[c(9:16,1:8),]
+anno_row<-distinct(NCycDB[,2:3])
+anno_row<-data.frame(anno_row[,-1])
+colnames(anno_row)[1]<-c("Pathway")
+row.names(anno_row)<-distinct(NCycDB[,2:3])[,1]
+map_color=c("Anammox"='#d60050','ANRA'='#c8a063','Denitrification'='#a8d8d9',
+            'Denitrification/DNRA'='#0e6793','DNRA'='#28a7e1',
+            'N_fixation'='#000000','Nitrification'='#009944','ON_degradation'= '#a38b77',
+            'ON_synthesis'='#898989','Others'='#601986')
+
+#氮循环基因丰度与物种丰度相关性
+cor_test<-corr.test(N_function,top10,
+                    use = "pairwise",method="spearman",adjust="holm", alpha=.05,ci=TRUE,minlength=5)
+p13<-pheatmap(cor_test$r,fontsize_number=25,fontsize = 15,angle_col = "315",display_numbers = matrix
+              (ifelse(cor_test$p <= 0.01, "**",ifelse(cor_test$p <= 0.05 ,"*"," ")), nrow(cor_test$p)), 
+              treeheight_row = 0,treeheight_col = 0,border_color = "#EEEEEE",cellwidth = 25,
+              cellheight = 25, fontfamily= "Times New Roman",
+              color = colorRampPalette(c("#00008B",'white',"#FFA500"))(50), number_color="white",
+              annotation_row = anno_row,annotation_colors = list(
+                Pathway = map_color ))
+ggsave(filename = "plot/N/pheatmap.png",p13,width = 9,height = 12)
